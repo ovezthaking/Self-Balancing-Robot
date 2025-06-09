@@ -13,7 +13,7 @@
 MPU6050 mpu;
 
 // MPU control/status vars
-bool dmpReady = false;
+bool dmpReady = true;
 uint8_t mpuIntStatus;
 uint8_t devStatus; //status after each device operation
 uint16_t packetSize;
@@ -39,8 +39,8 @@ double Kd = 1.4;
 double Ki = 60;
 PID pid(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
 
-double motorSpeedFactorLeft = 0.6;
-double motorSpeedFactorRight = 0.5;
+double motorSpeedFactorLeft = 0.9;
+double motorSpeedFactorRight = 0.9;
 
 //MOTOR CONTROLLER
 
