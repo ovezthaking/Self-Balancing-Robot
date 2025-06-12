@@ -7,7 +7,7 @@
 #include "Wire.h"
 #endif
 
-#define LOG_INPUT 0
+#define LOG_INPUT 1
 #define MIN_ABS_SPEED 30
 
 MPU6050 mpu;
@@ -26,7 +26,7 @@ VectorFloat gravity;
 float ypr[3];
 
 //PID
-double originalSetpoint = 155.74;
+double originalSetpoint = 179.98;
 double setpoint = originalSetpoint;
 double movingAngleOffset = 0.1;
 double input, output;
@@ -92,12 +92,18 @@ void setup()
   // mpu.setYGyroOffset(-220);  // była wartość X z przeciwnym znakiem
   // mpu.setZGyroOffset(-85);   // Z pozostaje bez zmian
   // mpu.setZAccelOffset(1788);
-  mpu.setXAccelOffset(-1214);
-  mpu.setYAccelOffset(-4095);
-  mpu.setZAccelOffset(949);
-  mpu.setXGyroOffset(66);
-  mpu.setYGyroOffset(21);
-  mpu.setZGyroOffset(26);
+  // mpu.setXAccelOffset(-1214); 12.06
+  // mpu.setYAccelOffset(-4095);
+  // mpu.setZAccelOffset(949);
+  // mpu.setXGyroOffset(66);
+  // mpu.setYGyroOffset(21);
+  // mpu.setZGyroOffset(26);
+  mpu.setXAccelOffset(-906);
+  mpu.setYAccelOffset(-3225); 
+  mpu.setZAccelOffset(790);
+  mpu.setXGyroOffset(64);
+  mpu.setYGyroOffset(23);
+  mpu.setZGyroOffset(27);
 
   if (devStatus == 0)
   {
@@ -186,10 +192,10 @@ void loop()
     Serial.println(ypr[2] * 180 / M_PI);
     Serial.print("\tPID_out\t");
     Serial.println(output);
-    Serial.print("\tMotor_factors\t");
-    Serial.print(motorSpeedFactorLeft);
-    Serial.print("\t");
-    Serial.println(motorSpeedFactorRight);
+    // Serial.print("\tMotor_factors\t");
+    // Serial.print(motorSpeedFactorLeft);
+    // Serial.print("\t");
+    // Serial.println(motorSpeedFactorRight);
 #endif
     input = ypr[1] * 180 / M_PI + 180;
   }

@@ -1,153 +1,290 @@
-// PIERWSZY KROK: Kod do kalibracji offsetów MPU6050
-// WAŻNE: Ten kod uwzględnia obrót MPU6050 o 90° w osi yaw
-// Wgraj ten kod osobno, żeby znaleźć właściwe offsety dla twojego modułu
+/*
+  IMU Zero
+
+  Calibrates the MPU6050 to compensate for measurement deviations or errors that may
+  occur due to factors such as gyroscope and accelerometer offset.
+
+  When running this example, the code adjusts the MPU6050 sensor's acceleration (X,Y,Z)
+  and rotation (gyroscope) axis offset values to ensure that the readings are as accurate as
+  possible when the device is at rest.
+
+  To get better results consider:
+  1. The MPU6050 module is working fine.
+  2. Put the MPU6050 on a flat and horizontal surface, and leave it operating for 
+  5-10 minutes so its temperature gets stabilized.
+  4. Is in a location where the pull of gravity is 1g.
+
+  During the execution it will generate a dozen outputs, showing that for each of the 6 
+  desired offsets, it is:
+  - First, try to find two estimates, one too low and one too high.
+  - Closing in until the bracket can't be made smaller.
+
+  The line just above the "done" (it will take a few minutes to get there) describes the 
+  optimum offsets for the X acceleration, Y acceleration, Z acceleration, X gyro, Y gyro, 
+  and Z gyro, respectively.
+
+  Find the full MPU6050 library documentation here:
+  https://github.com/ElectronicCats/mpu6050/wiki
+*/
 
 #include "I2Cdev.h"
 #include "MPU6050.h"
-#include "Wire.h"
 
+/* Create the class for MPU6050. Default I2C address is 0x68 */
 MPU6050 mpu;
+// MPU6050 mpu(0x69); // <-- use for AD0 high
 
-int16_t ax, ay, az;
-int16_t gx, gy, gz;
+const int usDelay = 3150; // Delay in ms to hold the sampling at 200Hz
+const int NFast = 1000; // Number of quick readings for averaging, the higher the better
+const int NSlow = 10000; // Number of slow readings for averaging, the higher the better
+const int LinesBetweenHeaders = 5;
 
-int mean_ax, mean_ay, mean_az, mean_gx, mean_gy, mean_gz, state = 0;
-int ax_offset, ay_offset, az_offset, gx_offset, gy_offset, gz_offset;
+const int iAx = 0;
+const int iAy = 1;
+const int iAz = 2;
+const int iGx = 3;
+const int iGy = 4;
+const int iGz = 5;
+
+int LowValue[6];
+int HighValue[6];
+int Smoothed[6];
+int LowOffset[6];
+int HighOffset[6];
+int Target[6];
+int LinesOut;
+int N;
+int i;
 
 void setup() {
-  Wire.begin();
-  Serial.begin(115200);
-  
-  mpu.initialize();
-  
-  Serial.println("===== KALIBRACJA OFFSETÓW MPU6050 (OBRÓCONY 90°) =====");
-  Serial.println("WAŻNE: Postaw robota z MPU6050 obróconą o 90° tak jak będzie pracować!");
-  Serial.println("Powierzchnia musi być idealnie płaska!");
-  Serial.println("Naciśnij dowolny klawisz aby rozpocząć...");
-  
-  while (Serial.available() && Serial.read()); // wyczyść bufor
-  while (!Serial.available());                 // czekaj na input
-  while (Serial.available() && Serial.read()); // wyczyść bufor ponownie
-  
-  Serial.println("Rozpoczynam kalibrację...");
-  calibrate();
+  Initialize(); //Initializate and calibrate the sensor
+  for (i = iAx; i <= iGz; i++) { 
+    Target[i] = 0; // Fix for ZAccel 
+    HighOffset[i] = 0;
+    LowOffset[i] = 0;
+  } 
+  Target[iAz] = 16384; // Set the taget for Z axes
+  SetAveraging(NFast); // Fast averaging
+  PullBracketsOut();
+  PullBracketsIn();
+  Serial.println("-------------- DONE --------------");
 }
 
 void loop() {
-  // Test offsetów - sprawdź czy wartości są blisko zera dla żyroskopu
-  // i czy Z-axis akcelerometru pokazuje ~16384 (1g)
-  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-  
-  Serial.print("Akcelerometr: ");
-  Serial.print("X="); Serial.print(ax);
-  Serial.print(" Y="); Serial.print(ay);
-  Serial.print(" Z="); Serial.print(az);
-  Serial.print("  Żyroskop: ");
-  Serial.print("X="); Serial.print(gx);
-  Serial.print(" Y="); Serial.print(gy);
-  Serial.print(" Z="); Serial.println(gz);
-  
-  // Sprawdź jakość kalibracji
-  if (abs(gx) < 50 && abs(gy) < 50 && abs(gz) < 50) {
-    Serial.println("✓ Żyroskop dobrze skalibrowany");
-  } else {
-    Serial.println("⚠ Żyroskop może wymagać ponownej kalibracji");
+  //Write your code here
+} 
+
+/*Initializate function*/
+void Initialize() {
+  #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+    Wire.begin();
+  #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
+    Fastwire::setup(400, true);
+  #endif
+  Serial.begin(115200);
+  // Init the module
+  Serial.println("Initializing MPU...");
+  mpu.initialize();
+  Serial.println("MPU initializated");
+  // Check module connection
+  Serial.println("Testing device connections...");
+  if(mpu.testConnection() ==  false){
+    Serial.println("MPU6050 connection failed");
+  while(true);
   }
-  
-  if (abs(az - 16384) < 500) {  // Z-axis powinien pokazywać ~16384 dla 1g
-    Serial.println("✓ Akcelerometr Z dobrze skalibrowany");
-  } else {
-    Serial.println("⚠ Akcelerometr Z może wymagać ponownej kalibracji");
+  else{
+    Serial.println("MPU6050 connection successful");
   }
+
+  Serial.println("\nPID tuning Each Dot = 100 readings");
+  /*
+  PID tuning (actually PI) works like this: changing the offset in the MPU6050 gives instant results, 
+  allowing us to use the Proportional and Integral parts of the PID to find the ideal offsets. 
+  The Integral uses the error from the set point (which is zero) and adds a fraction of this error to 
+  the integral value. Each reading reduces the error towards the desired offset. The greater 
+  the error, the more we adjust the integral value. 
   
-  delay(1000);
+  The Proportional part helps by filtering out noise from the integral calculation. The Derivative part is 
+  not used due to noise and the sensor being stationary. With the noise removed, the integral value stabilizes 
+  after about 600 readings. At the end of each set of 100 readings, the integral value is used for the actual 
+  offsets, and the last proportional reading is ignored because it reacts to any noise.
+  */
+  Serial.println("\nXAccel\t\tYAccel\t\tZAccel\t\tXGyro\t\tYGyro\t\tZGyro");
+  mpu.CalibrateAccel(6);
+  mpu.CalibrateGyro(6);
+  Serial.println("\n600 Readings");
+  mpu.PrintActiveOffsets();
+  mpu.CalibrateAccel(1);
+  mpu.CalibrateGyro(1);
+  Serial.println("700 Total Readings");
+  mpu.PrintActiveOffsets();
+  mpu.CalibrateAccel(1);
+  mpu.CalibrateGyro(1);
+  Serial.println("800 Total Readings");
+  mpu.PrintActiveOffsets();
+  mpu.CalibrateAccel(1);
+  mpu.CalibrateGyro(1);
+  Serial.println("900 Total Readings");
+  mpu.PrintActiveOffsets();
+  mpu.CalibrateAccel(1);
+  mpu.CalibrateGyro(1);
+  Serial.println("1000 Total Readings");
+  mpu.PrintActiveOffsets();
+  Serial.println("\nAny of the above offsets will work nicely \n\nProving the PID with other method:");
 }
 
-void calibrate() {
-  Serial.println("Kalibracja offsetów...");
-  
-  // Reset offsetów
-  mpu.setXAccelOffset(0);
-  mpu.setYAccelOffset(0);
-  mpu.setZAccelOffset(0);
-  mpu.setXGyroOffset(0);
-  mpu.setYGyroOffset(0);
-  mpu.setZGyroOffset(0);
-  
-  for (int i = 0; i < 3; i++) {
-    if (i > 0) {
-      Serial.println("Kładę robota na drugiej stronie i czekam...");
-      delay(3000);
+void SetAveraging(int NewN) {
+  N = NewN;
+  Serial.print("\nAveraging ");
+  Serial.print(N);
+  Serial.println(" readings each time");
+}
+
+void PullBracketsOut() {
+  boolean Done = false;
+  int NextLowOffset[6];
+  int NextHighOffset[6];
+
+  Serial.println("Expanding:");
+  ForceHeader();
+
+  while (!Done) {
+    Done = true;
+    SetOffsets(LowOffset); //Set low offsets
+    GetSmoothed();
+    for (i = 0; i <= 5; i++) { // Get low values
+      LowValue[i] = Smoothed[i];
+      if (LowValue[i] >= Target[i]) {
+        Done = false;
+        NextLowOffset[i] = LowOffset[i] - 1000;
+      } 
+      else {
+        NextLowOffset[i] = LowOffset[i];
+      }
     }
-    
-    Serial.print("Kalibracja "); Serial.print(i + 1); Serial.println("/3...");
-    
-    meansensors();
-    calibration();
-    
-    Serial.println("Aktualne offsety:");
-    Serial.print("  setXAccelOffset("); Serial.print(ax_offset); Serial.println(");");
-    Serial.print("  setYAccelOffset("); Serial.print(ay_offset); Serial.println(");");
-    Serial.print("  setZAccelOffset("); Serial.print(az_offset); Serial.println(");");
-    Serial.print("  setXGyroOffset("); Serial.print(gx_offset); Serial.println(");");
-    Serial.print("  setYGyroOffset("); Serial.print(gy_offset); Serial.println(");");
-    Serial.print("  setZGyroOffset("); Serial.print(gz_offset); Serial.println(");");
-    Serial.println();
+    SetOffsets(HighOffset);
+    GetSmoothed();
+    for (i = 0; i <= 5; i++) { // Get high values
+      HighValue[i] = Smoothed[i];
+      if (HighValue[i] <= Target[i]) {
+        Done = false;
+        NextHighOffset[i] = HighOffset[i] + 1000;
+      } 
+      else {
+        NextHighOffset[i] = HighOffset[i];
+      }
+    } 
+    ShowProgress();
+    for (int i = 0; i <= 5; i++) {
+      LowOffset[i] = NextLowOffset[i]; 
+      HighOffset[i] = NextHighOffset[i];
+    }
   }
-  
-  Serial.println("===== FINALNE OFFSETY =====");
-  Serial.println("Skopiuj te linie do swojego głównego kodu:");
-  Serial.println("UWAGA: Te offsety są dla MPU6050 obróconym o 90° w yaw!");
-  Serial.println();
-  Serial.print("  mpu.setXAccelOffset("); Serial.print(ax_offset); Serial.println(");");
-  Serial.print("  mpu.setYAccelOffset("); Serial.print(ay_offset); Serial.println(");");
-  Serial.print("  mpu.setZAccelOffset("); Serial.print(az_offset); Serial.println(");");
-  Serial.print("  mpu.setXGyroOffset("); Serial.print(gx_offset); Serial.println(");");
-  Serial.print("  mpu.setYGyroOffset("); Serial.print(gy_offset); Serial.println(");");
-  Serial.print("  mpu.setZGyroOffset("); Serial.print(gz_offset); Serial.println(");");
-  Serial.println();
-  Serial.println("INSTRUKCJA: W głównym kodzie użyj DOKŁADNIE tych wartości");
-  Serial.println("NIE mieszaj z poprzednimi offsetami!");
-  Serial.println("=============================");
 }
 
-void meansensors() {
-  long i = 0, buff_ax = 0, buff_ay = 0, buff_az = 0, buff_gx = 0, buff_gy = 0, buff_gz = 0;
-  
-  while (i < 1000) { // pobierz 1000 próbek
-    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-    
-    buff_ax += ax;
-    buff_ay += ay;
-    buff_az += az;
-    buff_gx += gx;
-    buff_gy += gy;
-    buff_gz += gz;
-    i++;
-    delay(2);
-  }
-  
-  mean_ax = buff_ax / 1000;
-  mean_ay = buff_ay / 1000;
-  mean_az = buff_az / 1000;
-  mean_gx = buff_gx / 1000;
-  mean_gy = buff_gy / 1000;
-  mean_gz = buff_gz / 1000;
+void PullBracketsIn() {
+  boolean AllBracketsNarrow;
+  boolean StillWorking;
+  int NewOffset[6];
+
+  Serial.println("\nClosing in:");
+  AllBracketsNarrow = false;
+  ForceHeader();
+  StillWorking = true;
+  while (StillWorking) {
+    StillWorking = false;
+    if (AllBracketsNarrow && (N == NFast)) {
+      SetAveraging(NSlow);
+    } 
+    else {
+      AllBracketsNarrow = true;
+    }
+    for (int i = 0; i <= 5; i++) {
+      if (HighOffset[i] <= (LowOffset[i] + 1)) {
+        NewOffset[i] = LowOffset[i];
+      } 
+      else { // Binary search
+        StillWorking = true;
+        NewOffset[i] = (LowOffset[i] + HighOffset[i]) / 2;
+        if (HighOffset[i] > (LowOffset[i] + 10)) {
+          AllBracketsNarrow = false;
+        }
+      } 
+    }
+    SetOffsets(NewOffset);
+    GetSmoothed();
+    for (i = 0; i <= 5; i++) { // Closing in
+      if (Smoothed[i] > Target[i]) { // Use lower half
+        HighOffset[i] = NewOffset[i];
+        HighValue[i] = Smoothed[i];
+      } 
+      else { // Use upper half
+        LowOffset[i] = NewOffset[i];
+        LowValue[i] = Smoothed[i];
+      } 
+    }
+    ShowProgress();
+  } 
+} 
+
+void ForceHeader() {
+  LinesOut = 99;
 }
 
-void calibration() {
-  ax_offset = -mean_ax / 8;
-  ay_offset = -mean_ay / 8;
-  az_offset = (16384 - mean_az) / 8; // 16384 = 1g w skali akcelerometru
+/*Function to smooth the read values*/
+void GetSmoothed() {
+  int16_t RawValue[6];
+  long Sums[6];
+  for (i = 0; i <= 5; i++) {
+    Sums[i] = 0;
+  }
   
-  gx_offset = -mean_gx / 4;
-  gy_offset = -mean_gy / 4;
-  gz_offset = -mean_gz / 4;
-  
-  mpu.setXAccelOffset(ax_offset);
-  mpu.setYAccelOffset(ay_offset);
-  mpu.setZAccelOffset(az_offset);
-  mpu.setXGyroOffset(gx_offset);
-  mpu.setYGyroOffset(gy_offset);
-  mpu.setZGyroOffset(gz_offset);
+/* Get Sums*/
+  for (i = 1; i <= N; i++) { 
+    mpu.getMotion6( & RawValue[iAx], & RawValue[iAy], & RawValue[iAz], & RawValue[iGx], & RawValue[iGy], & RawValue[iGz]);
+    delayMicroseconds(usDelay);
+    for (int j = 0; j <= 5; j++){
+      Sums[j] = Sums[j] + RawValue[j];
+    }
+  } 
+  for (i = 0; i <= 5; i++) {
+    Smoothed[i] = (Sums[i] + N / 2) / N;
+  }
+} 
+
+/*Function for configure the oba=tained offsets*/
+void SetOffsets(int TheOffsets[6]) {
+  mpu.setXAccelOffset(TheOffsets[iAx]);
+  mpu.setYAccelOffset(TheOffsets[iAy]);
+  mpu.setZAccelOffset(TheOffsets[iAz]);
+  mpu.setXGyroOffset(TheOffsets[iGx]);
+  mpu.setYGyroOffset(TheOffsets[iGy]);
+  mpu.setZGyroOffset(TheOffsets[iGz]);
 }
+
+/*Print the progress of the reading averages, add formatting for better visualization*/
+void ShowProgress() {
+ /*Header*/
+  if (LinesOut >= LinesBetweenHeaders) { 
+    Serial.println("\t\tXAccel\t\t\tYAccel\t\t\t\tZAccel\t\t\tXGyro\t\t\tYGyro\t\t\tZGyro");
+    LinesOut = 0;
+  } 
+  Serial.print(' ');
+  for (i = 0; i <= 5; i++) {
+    Serial.print('[');
+    Serial.print(LowOffset[i]),
+    Serial.print(',');
+    Serial.print(HighOffset[i]);
+    Serial.print("] --> [");
+    Serial.print(LowValue[i]);
+    Serial.print(',');
+    Serial.print(HighValue[i]);
+    if (i == 5) {
+      Serial.println("]");
+    } 
+    else {
+      Serial.print("]\t");
+    }
+  }
+  LinesOut++;
+} 
