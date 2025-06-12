@@ -7,8 +7,8 @@
 #include "Wire.h"
 #endif
 
-#define LOG_INPUT 1
-#define MIN_ABS_SPEED 20
+#define LOG_INPUT 0
+#define MIN_ABS_SPEED 30
 
 MPU6050 mpu;
 
@@ -26,7 +26,7 @@ VectorFloat gravity;
 float ypr[3];
 
 //PID
-double originalSetpoint = 155.0;
+double originalSetpoint = 155.74;
 double setpoint = originalSetpoint;
 double movingAngleOffset = 0.1;
 double input, output;
@@ -41,8 +41,9 @@ int moveState = 0; // we'll see
 // double Ki = 0.6;
 double Kp = 60;
 double Kd = 2.2;
-double Ki = 270;
+double Ki = 400;
 PID pid(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
+
 
 double motorSpeedFactorLeft = 0.9;
 double motorSpeedFactorRight = 0.9;
@@ -55,7 +56,6 @@ int IN3 = 8;
 int IN4 = 9;
 int ENB = 10;
 LMotorController motorController(ENA, IN1, IN2, ENB, IN3, IN4, motorSpeedFactorLeft, motorSpeedFactorRight);
-
 long time1Hz = 0;
 long time5Hz = 0;
 
@@ -129,6 +129,7 @@ void setup()
 
 void loop()
 {
+ 
   if (!dmpReady) return;
 
   while (!mpuInterrupt && fifoCount < packetSize)
@@ -183,6 +184,12 @@ void loop()
     Serial.print(ypr[1] * 180 / M_PI);
     Serial.print("\t");
     Serial.println(ypr[2] * 180 / M_PI);
+    Serial.print("\tPID_out\t");
+    Serial.println(output);
+    Serial.print("\tMotor_factors\t");
+    Serial.print(motorSpeedFactorLeft);
+    Serial.print("\t");
+    Serial.println(motorSpeedFactorRight);
 #endif
     input = ypr[1] * 180 / M_PI + 180;
   }
