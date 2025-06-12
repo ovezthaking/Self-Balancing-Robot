@@ -25,11 +25,18 @@ VectorFloat gravity;
 float ypr[3];
 
 //PID
-double originalSetpoint = 180.0;
+double originalSetpoint = 175.8;
 double setpoint = originalSetpoint;
 double movingAngleOffset = 0.1;
 double input, output;
 int moveState = 0; // we'll see
+
+// Detekcja upadku
+#define FALL_ANGLE_THRESHOLD 30.0  // kąt w stopniach - jeśli robot jest bardziej przechylony, uznaj za upadek
+#define RECOVERY_ANGLE_THRESHOLD 15.0  // kąt powrotu do normalnego działania
+bool robotFallen = false;
+unsigned long fallStartTime = 0;
+#define FALL_TIMEOUT 3000  // 3 sekundy timeout na próbę powrotu
 
 //user's own fit
 double Kp = 50;
@@ -120,8 +127,21 @@ void loop()
 
   while (!mpuInterrupt && fifoCount < packetSize)
   {
-    pid.Compute();
-    motorController.move(output, MIN_ABS_SPEED);
+    // Sprawdź czy robot nie upadł przed obliczeniem PID
+    if (!robotFallen) {
+      pid.Compute();
+      motorController.move(output, MIN_ABS_SPEED);
+    } else {
+      // Robot upadł - zatrzymaj silniki
+      motorController.move(0, 0);
+      
+      // Sprawdź timeout - jeśli robot leży zbyt długo, zatrzymaj całkowicie
+      if (millis() - fallStartTime > FALL_TIMEOUT) {
+        Serial.println(F("Robot fallen - timeout reached, stopping motors"));
+        motorController.move(0, 0);
+        delay(100);  // krótka pauza
+      }
+    }
   }
 
   mpuInterrupt = false;
@@ -144,24 +164,52 @@ void loop()
     mpu.dmpGetGravity(&gravity, &q);
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
 
-    // GŁÓWNA ZMIANA: Rotacja kwaterniona o 90° w osi Z (yaw)
-    // Dla obrotu o 90° w lewo (przeciwnie do ruchu wskazówek zegara)
-    Quaternion rotationZ;
-    rotationZ.w = cos(M_PI/4);  // cos(90°/2) = cos(45°)
-    rotationZ.x = 0;
-    rotationZ.y = 0;
-    rotationZ.z = sin(M_PI/4);  // sin(90°/2) = sin(45°)
+    // PROSTSZE PODEJŚCIE: Bezpośrednie dodanie 90° do yaw
+    // Standardowy odczyt YPR
+    mpu.dmpGetQuaternion(&q, fifoBuffer);
+    mpu.dmpGetGravity(&gravity, &q);
+    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
     
-    // Mnożenie kwaternionów: q_rotated = rotationZ * q
-    Quaternion q_rotated;
-    q_rotated.w = rotationZ.w * q.w - rotationZ.z * q.z;
-    q_rotated.x = rotationZ.w * q.x + rotationZ.z * q.y;
-    q_rotated.y = rotationZ.w * q.y - rotationZ.z * q.x;
-    q_rotated.z = rotationZ.w * q.z + rotationZ.z * q.w;
+    // Dodaj 90° (π/2 radianów) do yaw
+    ypr[0] += M_PI/2;
     
-    // Oblicz YPR z obróconym kwaternionem
-    mpu.dmpGetGravity(&gravity, &q_rotated);
-    mpu.dmpGetYawPitchRoll(ypr, &q_rotated, &gravity);
+    // Normalizuj do zakresu -π do π
+    if (ypr[0] > M_PI) ypr[0] -= 2*M_PI;
+    if (ypr[0] < -M_PI) ypr[0] += 2*M_PI;
+
+    input = ypr[1] * 180 / M_PI + 180;
+    
+    // DETEKCJA UPADKU
+    float currentAngle = abs(ypr[1] * 180 / M_PI);  // pitch w stopniach (bezwzględna wartość)
+    
+    if (!robotFallen) {
+      // Robot normalnie działa - sprawdź czy nie upadł
+      if (currentAngle > FALL_ANGLE_THRESHOLD) {
+        robotFallen = true;
+        fallStartTime = millis();
+        Serial.print(F("Robot fallen! Angle: "));
+        Serial.println(currentAngle);
+        
+        // Zatrzymaj silniki natychmiast
+        motorController.move(0, 0);
+        
+        // Reset PID aby uniknąć nagromadzonego błędu
+        pid.SetMode(MANUAL);
+        output = 0;
+        pid.SetMode(AUTOMATIC);
+      }
+    } else {
+      // Robot upadł - sprawdź czy się podniósł
+      if (currentAngle < RECOVERY_ANGLE_THRESHOLD) {
+        robotFallen = false;
+        Serial.println(F("Robot recovered!"));
+        
+        // Reset PID na świeży start
+        pid.SetMode(MANUAL);
+        output = 0;
+        pid.SetMode(AUTOMATIC);
+      }
+    }
 
 #if LOG_INPUT
     Serial.print("ypr\t");
@@ -169,8 +217,9 @@ void loop()
     Serial.print("\t");
     Serial.print(ypr[1] * 180 / M_PI);
     Serial.print("\t");
-    Serial.println(ypr[2] * 180 / M_PI);
+    Serial.print(ypr[2] * 180 / M_PI);
+    Serial.print("\tFallen: ");
+    Serial.println(robotFallen ? "YES" : "NO");
 #endif
-    input = ypr[1] * 180 / M_PI + 180;
   }
 }

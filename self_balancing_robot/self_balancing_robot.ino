@@ -7,6 +7,7 @@
 #include "Wire.h"
 #endif
 
+#define LOG_INPUT 1
 #define MIN_ABS_SPEED 20
 
 MPU6050 mpu;
@@ -25,16 +26,22 @@ VectorFloat gravity;
 float ypr[3];
 
 //PID
-double originalSetpoint = 180.0;
+double originalSetpoint = 155.0;
 double setpoint = originalSetpoint;
 double movingAngleOffset = 0.1;
 double input, output;
 int moveState = 0; // we'll see
 
 //user's own fit
-double Kp = 50;
-double Kd = 1.4;
-double Ki = 60;
+// double Kp = 50;
+// double Kd = 1.4;
+// double Ki = 60;
+// double Kp = 55;
+// double Kd = 0.9;
+// double Ki = 0.6;
+double Kp = 60;
+double Kd = 2.2;
+double Ki = 270;
 PID pid(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
 
 double motorSpeedFactorLeft = 0.9;
@@ -81,10 +88,16 @@ void setup()
 
   // WAŻNE: Offset dla obróconych osi - dostosuj te wartości do swojego modułu
   // Po obróceniu o 90° w yaw, osie X i Y są zamienione
-  mpu.setXGyroOffset(76);    // była wartość Y
-  mpu.setYGyroOffset(-220);  // była wartość X z przeciwnym znakiem
-  mpu.setZGyroOffset(-85);   // Z pozostaje bez zmian
-  mpu.setZAccelOffset(1788);
+  // mpu.setXGyroOffset(76);    // była wartość Y
+  // mpu.setYGyroOffset(-220);  // była wartość X z przeciwnym znakiem
+  // mpu.setZGyroOffset(-85);   // Z pozostaje bez zmian
+  // mpu.setZAccelOffset(1788);
+  mpu.setXAccelOffset(-1214);
+  mpu.setYAccelOffset(-4095);
+  mpu.setZAccelOffset(949);
+  mpu.setXGyroOffset(66);
+  mpu.setYGyroOffset(21);
+  mpu.setZGyroOffset(26);
 
   if (devStatus == 0)
   {
